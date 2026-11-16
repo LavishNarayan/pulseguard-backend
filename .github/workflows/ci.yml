@@ -1,0 +1,89 @@
+name: PulseGuard CI Pipeline
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  lint-and-test:
+    name: Ruff Lint & Pytest Integration Suite
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: pulseguard
+          POSTGRES_PASSWORD: pulseguard
+          POSTGRES_DB: pulseguard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies & Ruff linter
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install ruff
+
+      - name: Run Ruff Linter & Format Check
+        run: |
+          ruff check app/ tests/ scripts/
+          ruff format --check app/ tests/ scripts/
+
+      - name: Run Pytest Suite
+        env:
+          ASYNC_DATABASE_URL: postgresql+asyncpg://pulseguard:pulseguard@localhost:5432/pulseguard
+          SYNC_DATABASE_URL: postgresql+psycopg2://pulseguard:pulseguard@localhost:5432/pulseguard
+          REDIS_URL: redis://localhost:6379/0
+          CELERY_BROKER_URL: redis://localhost:6379/1
+          CELERY_RESULT_BACKEND: redis://localhost:6379/2
+        run: |
+          pytest -v --tb=short
+
+  docker-build-verify:
+    name: Verify Production Docker Image Build
+    runs-on: ubuntu-latest
+    needs: lint-and-test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker Image (No Push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: pulseguard-backend:ci-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
