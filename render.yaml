@@ -1,0 +1,52 @@
+databases:
+  - name: pulseguard-db
+    databaseName: pulseguard
+    user: pulseguard
+    plan: free
+
+services:
+  - type: redis
+    name: pulseguard-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []
+
+  - type: web
+    name: pulseguard-api
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: USE_BACKGROUND_TASKS
+        value: "true"
+      - key: SECRET_KEY
+        generateValue: true
+      - key: EDGE_API_KEY
+        value: pg_edge_live_98a76b54c32d10e
+      - key: ASYNC_DATABASE_URL
+        fromDatabase:
+          name: pulseguard-db
+          property: connectionString
+      - key: SYNC_DATABASE_URL
+        fromDatabase:
+          name: pulseguard-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: pulseguard-redis
+          property: connectionString
+      - key: CELERY_BROKER_URL
+        fromService:
+          type: redis
+          name: pulseguard-redis
+          property: connectionString
+      - key: CELERY_RESULT_BACKEND
+        fromService:
+          type: redis
+          name: pulseguard-redis
+          property: connectionString

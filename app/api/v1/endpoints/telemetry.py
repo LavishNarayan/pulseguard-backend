@@ -1,5 +1,6 @@
 import json
-from fastapi import APIRouter, Depends, HTTPException, status
+import os
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 import redis.asyncio as aioredis
 from app.core.config import settings
 from app.core.security import get_current_engineer, verify_edge_api_key
@@ -29,11 +30,19 @@ async def enforce_rate_limit(machine_code: str):
     status_code=status.HTTP_202_ACCEPTED,
     dependencies=[Depends(verify_edge_api_key)],
 )
-async def ingest_telemetry(payload: TelemetryIngest):
+async def ingest_telemetry(payload: TelemetryIngest, background_tasks: BackgroundTasks):
     await enforce_rate_limit(payload.machine_code)
     TELEMETRY_INGESTED_TOTAL.labels(facility_zone=payload.facility_zone).inc()
-    task = process_telemetry_task.delay(payload.model_dump())
-    return TelemetryAck(task_id=task.id, machine_code=payload.machine_code)
+    data = payload.model_dump()
+
+    if os.getenv("USE_BACKGROUND_TASKS", "false").lower() == "true":
+        background_tasks.add_task(process_telemetry_task, data)
+        task_id = f"bg-{payload.machine_code}"
+    else:
+        task = process_telemetry_task.delay(data)
+        task_id = task.id
+
+    return TelemetryAck(task_id=task_id, machine_code=payload.machine_code)
 
 
 @router.get("/live/{machine_code}", dependencies=[Depends(get_current_engineer)])
